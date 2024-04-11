@@ -18,7 +18,7 @@ else
         echo "==================="
     fi
 fi
-if ! docker verison; then
+if ! docker version; then
     echo "==>  Error: Gagal menjalankan docker."
     exit 1
 fi
